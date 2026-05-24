@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VORTEX — Dashboard Profesor</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #060a14; --surface: #0d1426; --surface2: #111827;
+    --border:  #1e2d4a; --border2: #263555;
+    --accent:  #00d4ff; --accent2: #7c3aed;
+    --warn:    #f59e0b; --danger: #ef4444; --ok: #10b981;
+    --text:    #e2e8f0; --muted:  #64748b;
+    --font-ui: 'Syne', sans-serif;
+    --font-mono:'Space Mono', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--font-ui); overflow-x: hidden;
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(0,212,255,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,.025) 1px, transparent 1px);
+    background-size: 40px 40px; z-index: 0;
+  }
+
+  /* ── TOPBAR ── */
+  .topbar {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(6,10,20,.95); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: .65rem 1.25rem;
+    display: flex; align-items: center; gap: .85rem; flex-wrap: wrap;
+  }
+  .logo { font-family: var(--font-mono); color: var(--accent); font-size: .95rem; letter-spacing: .2em; white-space: nowrap; }
+  .topbar-stats {
+    display: flex; gap: 1rem; flex: 1; flex-wrap: wrap; align-items: center; min-width: 0;
+  }
+  .stat-pill {
+    display: flex; align-items: center; gap: .4rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: .25rem .75rem;
+    font-size: .73rem; font-family: var(--font-mono); white-space: nowrap;
+  }
+  .stat-pill .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .topbar-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+
+  /* Inputs CSV ocultos */
+  input[type="file"] { display: none; }
+
+  .tb-btn {
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); border-radius: 7px; padding: .38rem .8rem;
+    font-family: var(--font-ui); font-size: .78rem; cursor: pointer;
+    transition: background .2s, border-color .2s; white-space: nowrap;
+  }
+  .tb-btn:hover { background: var(--border2); }
+  .tb-btn.primary {
+    background: linear-gradient(135deg, var(--accent), #0080ff);
+    border-color: transparent; color: #000; font-weight: 700;
+  }
+  .tb-btn.primary:hover { opacity: .88; }
+  .tb-btn.danger { background: rgba(239,68,68,.12); border-color: var(--danger); color: var(--danger); }
+  .tb-btn.warn   { background: rgba(245,158,11,.12); border-color: var(--warn);   color: var(--warn); }
+  .tb-btn.ok     { background: rgba(16,185,129,.12); border-color: var(--ok);     color: var(--ok); }
+
+  /* ── LAYOUT ── */
+  .layout {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 310px;
+    min-height: calc(100vh - 52px);
+  }
+  @media (max-width: 1024px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+  }
+
+  /* ── MAIN ── */
+  .main { padding: 1.1rem; overflow-y: auto; }
+  .section-title {
+    font-size: .72rem; font-family: var(--font-mono); color: var(--muted);
+    text-transform: uppercase; letter-spacing: .12em; margin-bottom: .8rem;
+    display: flex; align-items: center; gap: .6rem;
+  }
+  .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* ── STUDENT GRID ── */
+  #students-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: .7rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .student-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 11px; padding: .8rem; position: relative;
+    overflow: hidden; transition: border-color .25s, box-shadow .25s;
+  }
+  .student-card::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 3px;
+    height: 100%; background: var(--muted); transition: background .25s;
+  }
+  .student-card.online::before  { background: var(--ok); }
+  .student-card.suspicious { border-color: rgba(245,158,11,.4); }
+  .student-card.suspicious::before { background: var(--warn); }
+  .student-card.high-suspicion {
+    border-color: rgba(239,68,68,.7);
+    animation: blink-border .65s infinite;
+  }
+  .student-card.high-suspicion::before { background: var(--danger); }
+  @keyframes blink-border {
+    0%,100% { box-shadow: 0 0 0 1px rgba(239,68,68,.2); }
+    50%      { box-shadow: 0 0 0 3px rgba(239,68,68,.55); }
+  }
+  .student-card.offline  { opacity: .5; }
+  .student-card.finished::before { background: var(--accent2); }
+
+  .sc-top {
+    display: flex; align-items: flex-start;
+    justify-content: space-between; gap: .4rem; margin-bottom: .4rem;
+  }
+  .sc-name { font-size: .85rem; font-weight: 600; line-height: 1.3; }
+  .sc-mat  { font-size: .68rem; font-family: var(--font-mono); color: var(--muted); margin-top: .1rem; }
+  .sc-badges { display: flex; gap: .25rem; flex-wrap: wrap; flex-shrink: 0; }
+  .badge {
+    font-size: .6rem; font-family: var(--font-mono);
+    padding: .12rem .38rem; border-radius: 4px;
+    background: var(--border); color: var(--muted);
+  }
+  .badge.warn  { background: rgba(245,158,11,.15); color: var(--warn); }
+  .badge.danger{ background: rgba(239,68,68,.15); color: var(--danger); }
+  .badge.ok    { background: rgba(16,185,129,.15); color: var(--ok); }
+  .badge.cam-off { background: rgba(245,158,11,.1); color: var(--warn); }
+
+  /* Foto del alumno */
+  .sc-photo-wrap {
+    margin: .4rem 0; display: flex; justify-content: center;
+    min-height: 36px; align-items: center;
+  }
+  .sc-photo {
+    width: 100%; max-height: 70px; border-radius: 5px;
+    object-fit: cover; border: 1px solid var(--border);
+    display: none;
+  }
+
+  .sc-progress {
+    height: 3px; background: var(--border); border-radius: 2px;
+    margin: .45rem 0; overflow: hidden;
+  }
+  .sc-progress-fill {
+    height: 100%; border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .4s ease;
+  }
+  .sc-meta {
+    display: flex; justify-content: space-between;
+    font-size: .7rem; font-family: var(--font-mono); color: var(--muted);
+  }
+  .sc-suspicion.high { color: var(--danger); font-weight: 700; }
+  .sc-suspicion.med  { color: var(--warn); }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    border-left: 1px solid var(--border); background: var(--surface);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .sidebar-tab-bar { display: flex; border-bottom: 1px solid var(--border); }
+  .stab {
+    flex: 1; padding: .65rem .4rem; text-align: center;
+    font-size: .72rem; font-family: var(--font-mono); color: var(--muted);
+    cursor: pointer; border-bottom: 2px solid transparent;
+    transition: color .2s, border-color .2s;
+  }
+  .stab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .sidebar-panel { display: none; flex: 1; overflow-y: auto; padding: .8rem; }
+  .sidebar-panel.active { display: block; }
+
+  /* Log alertas */
+  .alert-log { display: flex; flex-direction: column; gap: .45rem; }
+  .alert-item {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 7px; padding: .55rem .7rem;
+    font-size: .75rem; border-left: 3px solid var(--muted);
+  }
+  .alert-item.blur   { border-left-color: var(--warn); }
+  .alert-item.camera { border-left-color: var(--accent); }
+  .alert-item.token  { border-left-color: var(--accent2); }
+  .alert-item.sus    { border-left-color: var(--danger); }
+  .alert-item.ok     { border-left-color: var(--ok); }
+  .alert-name  { font-weight: 600; margin-bottom: .12rem; }
+  .alert-event { color: var(--muted); font-family: var(--font-mono); font-size: .68rem; }
+  .alert-time  { color: var(--border2); font-family: var(--font-mono); font-size: .63rem; float: right; }
+
+  /* Resultados */
+  .results-table { width: 100%; font-size: .76rem; border-collapse: collapse; }
+  .results-table th, .results-table td {
+    padding: .45rem .35rem; text-align: left; border-bottom: 1px solid var(--border);
+  }
+  .results-table th { color: var(--muted); font-family: var(--font-mono); font-size: .68rem; }
+  .results-table tr:last-child td { border: none; }
+  .score-chip {
+    display: inline-block; padding: .18rem .45rem;
+    border-radius: 4px; font-family: var(--font-mono); font-size: .72rem;
+  }
+  .score-chip.good { background: rgba(16,185,129,.15); color: var(--ok); }
+  .score-chip.avg  { background: rgba(245,158,11,.15); color: var(--warn); }
+  .score-chip.bad  { background: rgba(239,68,68,.15); color: var(--danger); }
+
+  /* Controles examen */
+  .exam-ctrl { display: flex; flex-direction: column; gap: .7rem; }
+  .exam-select {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+    padding: .55rem .8rem; color: var(--text); font-family: var(--font-ui);
+    font-size: .82rem; outline: none; width: 100%;
+  }
+  .exam-select:focus { border-color: var(--accent); }
+
+  /* ── MODALES ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,.78); backdrop-filter: blur(5px);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 1.75rem 1.5rem; width: 360px; max-width: 95vw;
+  }
+  .modal-card h3 { margin-bottom: .35rem; font-size: 1rem; }
+  .modal-card p.modal-sub { color: var(--muted); font-size: .8rem; margin-bottom: 1.25rem; }
+
+  /* Modal token */
+  .modal-token {
+    font-family: var(--font-mono); font-size: 3.2rem; color: var(--accent);
+    letter-spacing: .35em; margin: 1rem 0;
+    background: var(--bg); border-radius: 10px; padding: .6rem;
+    text-align: center; border: 1px solid var(--border);
+  }
+  .modal-student-name { color: var(--muted); font-size: .82rem; margin-bottom: 1rem; text-align: center; }
+
+  /* Modal contraseña */
+  .modal-field {
+    margin-bottom: .85rem;
+  }
+  .modal-field label {
+    display: block; font-size: .75rem; color: var(--muted);
+    margin-bottom: .35rem; font-family: var(--font-mono);
+  }
+  .modal-field input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 7px; padding: .6rem .85rem; color: var(--text);
+    font-family: var(--font-mono); font-size: .9rem; outline: none;
+    transition: border-color .2s;
+  }
+  .modal-field input:focus { border-color: var(--accent); }
+  .modal-error { color: var(--danger); font-size: .78rem; margin: .5rem 0 .85rem; min-height: 1rem; }
+  .modal-actions { display: flex; gap: .6rem; justify-content: flex-end; margin-top: .25rem; }
+
+  /* Exam select in topbar */
+  #exam-select {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 7px; padding: .38rem .7rem;
+    color: var(--text); font-family: var(--font-ui); font-size: .78rem; outline: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="logo">VOR//TEX <span style="color:var(--muted);font-size:.65rem">ADMIN</span></div>
+
+  <div class="topbar-stats">
+    <div class="stat-pill"><div class="dot" style="background:var(--ok)"></div><span id="stat-online">0 en línea</span></div>
+    <div class="stat-pill"><div class="dot" style="background:var(--accent2)"></div><span id="stat-finished">0 terminados</span></div>
+    <div class="stat-pill"><div class="dot" style="background:var(--danger)"></div><span id="stat-suspicious">0 alertas</span></div>
+    <div class="stat-pill"><div class="dot" style="background:var(--warn)"></div><span id="stat-token">0 sin cámara</span></div>
+    <div class="stat-pill" style="border-color:var(--border2)"><span id="stat-total">0 / 50 alumnos</span></div>
+  </div>
+
+  <div class="topbar-actions">
+    <select id="exam-select"></select>
+    <button class="tb-btn primary" id="btn-start">▶ Iniciar</button>
+    <button class="tb-btn danger"  id="btn-stop">⏹ Detener</button>
+    <button class="tb-btn ok"      id="btn-import-students" title="Cargar padrón de alumnos (CSV: nombre,matricula)">📋 Alumnos</button>
+    <button class="tb-btn warn"    id="btn-import-exam"     title="Cargar banco de preguntas (CSV: examen_titulo,pregunta,opcion_a…d,correcta)">📚 Preguntas</button>
+    <button class="tb-btn"         id="btn-export">⬇ Exportar CSV</button>
+    <button class="tb-btn"         id="btn-change-pass" title="Cambiar contraseña de administrador">🔑</button>
+  </div>
+</div>
+
+<!-- Inputs CSV ocultos -->
+<input type="file" id="input-students-csv" accept=".csv,text/csv">
+<input type="file" id="input-exam-csv"     accept=".csv,text/csv">
+
+<!-- Badge padrón (se muestra en el sidebar) -->
+
+<!-- LAYOUT -->
+<div class="layout">
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="section-title">
+      Monitoreo en Tiempo Real
+      <span id="roster-badge" style="font-family:var(--font-mono);font-size:.68rem;color:var(--muted);border:1px solid var(--border);border-radius:12px;padding:.1rem .5rem;">Sin padrón</span>
+    </div>
+    <div id="students-grid"></div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-tab-bar">
+      <div class="stab active" data-panel="alerts">Alertas</div>
+      <div class="stab" data-panel="results">Resultados</div>
+      <div class="stab" data-panel="exam">Examen</div>
+    </div>
+
+    <div class="sidebar-panel active" id="panel-alerts">
+      <div class="alert-log" id="alert-log">
+        <p style="color:var(--muted);font-size:.8rem;">Sin alertas aún.</p>
+      </div>
+    </div>
+
+    <div class="sidebar-panel" id="panel-results">
+      <table class="results-table">
+        <thead><tr><th>Alumno</th><th>Score</th><th>Sus.</th></tr></thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+
+    <div class="sidebar-panel" id="panel-exam">
+      <div class="exam-ctrl">
+        <p style="color:var(--muted);font-size:.78rem;line-height:1.5;">
+          Selecciona un examen en la barra superior y presiona <strong>▶ Iniciar</strong>
+          para liberar las preguntas a todos los alumnos en sala de espera.
+        </p>
+        <hr style="border-color:var(--border)">
+        <p style="font-size:.75rem;font-family:var(--font-mono);color:var(--muted);">Formatos CSV aceptados:</p>
+        <pre style="font-size:.65rem;color:var(--muted);background:var(--bg);padding:.6rem;border-radius:6px;overflow-x:auto;line-height:1.6;">
+<strong>Alumnos:</strong>
+nombre,matricula
+Juan García,2024001
+
+<strong>Preguntas:</strong>
+examen_titulo,pregunta,
+opcion_a,opcion_b,
+opcion_c,opcion_d,
+correcta
+Bio101,¿Cuánto es…,
+A,B,C,D,1</pre>
+        <p style="font-size:.7rem;color:var(--muted);">
+          <em>correcta</em>: índice 0-3 (A=0 B=1 C=2 D=3) o letra A/B/C/D
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Token de validación -->
+<div class="modal-overlay" id="token-modal">
+  <div class="modal-card" style="text-align:center;">
+    <h3>Token de Validación</h3>
+    <p class="modal-sub">Dicta este código verbalmente al alumno. Expira en 5 minutos.</p>
+    <p class="modal-student-name" id="modal-token-name">—</p>
+    <div class="modal-token" id="modal-token-value">----</div>
+    <div class="modal-actions" style="justify-content:center;">
+      <button class="tb-btn" onclick="closeTokenModal()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Cambiar contraseña -->
+<div class="modal-overlay" id="pass-modal">
+  <div class="modal-card">
+    <h3>Cambiar Contraseña</h3>
+    <p class="modal-sub">Al confirmar, se cerrará tu sesión actual. Deberás ingresar de nuevo con la nueva contraseña.</p>
+    <div class="modal-field">
+      <label>Contraseña actual</label>
+      <input type="password" id="pass-current" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div class="modal-field">
+      <label>Nueva contraseña (mín. 6 caracteres)</label>
+      <input type="password" id="pass-new" placeholder="••••••••" autocomplete="new-password">
+    </div>
+    <div class="modal-field">
+      <label>Confirmar nueva contraseña</label>
+      <input type="password" id="pass-confirm" placeholder="••••••••" autocomplete="new-password">
+    </div>
+    <p class="modal-error" id="pass-error"></p>
+    <div class="modal-actions">
+      <button class="tb-btn" onclick="closePassModal()">Cancelar</button>
+      <button class="tb-btn primary" id="btn-save-pass">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/admin/app.js"></script>
+</body>
+</html>

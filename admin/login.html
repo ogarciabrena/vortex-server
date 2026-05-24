@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VORTEX — Acceso Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060a14; --surface: #0d1426; --border: #1e2d4a;
+    --accent: #00d4ff; --danger: #ef4444; --text: #e2e8f0; --muted: #64748b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background-image:
+      linear-gradient(rgba(0,212,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .login-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 2.5rem 2rem; width: 100%; max-width: 380px;
+    position: relative; overflow: hidden;
+  }
+  .login-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--accent), #7c3aed);
+  }
+  .logo {
+    font-family: 'Space Mono', monospace; font-size: 1.3rem; color: var(--accent);
+    letter-spacing: .2em; margin-bottom: .25rem;
+  }
+  .subtitle { color: var(--muted); font-size: .8rem; margin-bottom: 2rem; }
+  label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: .4rem; }
+  input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: .75rem 1rem; color: var(--text);
+    font-family: 'Space Mono', monospace; font-size: .9rem; outline: none;
+    transition: border-color .2s; margin-bottom: 1rem;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    width: 100%; background: linear-gradient(135deg, var(--accent), #0080ff);
+    border: none; border-radius: 8px; padding: .8rem;
+    color: #000; font-family: 'Syne', sans-serif; font-size: .95rem;
+    font-weight: 700; cursor: pointer; letter-spacing: .05em;
+  }
+  button:disabled { opacity: .5; }
+  .err { color: var(--danger); font-size: .8rem; margin-top: .5rem; }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo">VOR//TEX</div>
+  <p class="subtitle">Panel de Administración — Acceso Restringido</p>
+  <label>Contraseña de administrador</label>
+  <input type="password" id="pass" placeholder="••••••••••" autocomplete="current-password">
+  <button id="btn" onclick="login()">Acceder</button>
+  <p class="err" id="err"></p>
+</div>
+<script>
+  async function login() {
+    const pass = document.getElementById('pass').value;
+    const btn  = document.getElementById('btn');
+    const err  = document.getElementById('err');
+    if (!pass) return;
+    btn.disabled = true;
+    btn.textContent = 'Verificando...';
+    try {
+      const res  = await fetch('/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pass })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        document.cookie = `vortex_token=${data.token}; path=/; max-age=86400`;
+        const params = new URLSearchParams(window.location.search);
+        window.location.href = params.get('redirect') || '/admin/';
+      } else {
+        err.textContent = 'Contraseña incorrecta.';
+        btn.disabled = false; btn.textContent = 'Acceder';
+      }
+    } catch {
+      err.textContent = 'Error de red.';
+      btn.disabled = false; btn.textContent = 'Acceder';
+    }
+  }
+  document.getElementById('pass').addEventListener('keydown', e => {
+    if (e.key === 'Enter') login();
+  });
+</script>
+</body>
+</html>
