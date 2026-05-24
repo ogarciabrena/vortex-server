@@ -1,493 +1,279 @@
-# VORTEX — Sistema de Evaluación Escolar Edge
-## Guía de Despliegue Completa · Versión 1.0
+<p align="center">
+  <pre>
+╔══════════════════════════════════════════════════════════╗
+║  ██╗   ██╗ ██████╗ ██████╗ ████████╗███████╗██╗  ██╗   ║
+║  ██║   ██║██╔═══██╗██╔══██╗╚══██╔══╝██╔════╝╚██╗██╔╝   ║
+║  ██║   ██║██║   ██║██████╔╝   ██║   █████╗   ╚███╔╝    ║
+║  ╚██╗ ██╔╝██║   ██║██╔══██╗   ██║   ██╔══╝   ██╔██╗    ║
+║   ╚████╔╝ ╚██████╔╝██║  ██║   ██║   ███████╗██╔╝ ██╗   ║
+║    ╚═══╝   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝   ║
+║          Sistema de Evaluación Escolar Edge              ║
+╚══════════════════════════════════════════════════════════╝
+  </pre>
+</p>
 
-```
-╔══════════════════════════════════════════════════════════════╗
-║   VORTEX — Red Local Desconectada · 50 Alumnos Simultáneos   ║
-║   Backend: Node.js + Express + Socket.io + SQLite            ║
-║   Cliente:  PWA (HTML5 + Vanilla JS) · Sin instalación       ║
-╚══════════════════════════════════════════════════════════════╝
-```
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-22-339933?style=for-the-badge&logo=node.js&logoColor=white"/>
+  <img src="https://img.shields.io/badge/SQLite-WAL-003B57?style=for-the-badge&logo=sqlite&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Socket.io-4.7-010101?style=for-the-badge&logo=socket.io&logoColor=white"/>
+  <img src="https://img.shields.io/badge/PWA-offline-5A0FC8?style=for-the-badge&logo=pwa&logoColor=white"/>
+  <img src="https://img.shields.io/badge/plataforma-Linux%20%7C%20Windows-blue?style=for-the-badge"/>
+</p>
 
----
+<p align="center">
+  Sistema de examen escolar que funciona <strong>sin internet</strong>, desde una USB.<br/>
+  El profesor ejecuta un solo archivo. Los alumnos se conectan desde el navegador de su celular.
+</p>
 
-## ÍNDICE
-
-1. [Auditoría de Riesgos y Mitigaciones](#1-auditoría-de-riesgos-y-mitigaciones)
-2. [Requisitos del Sistema](#2-requisitos-del-sistema)
-3. [Configuración del Router Netis WF2411](#3-configuración-del-router-netis-wf2411)
-4. [Instalación y Arranque](#4-instalación-y-arranque)
-5. [Compilar Ejecutables Portátiles (pkg)](#5-compilar-ejecutables-portátiles-pkg)
-6. [Guía de Uso del Dashboard Admin](#6-guía-de-uso-del-dashboard-admin)
-7. [Arquitectura Técnica](#7-arquitectura-técnica)
-8. [Solución de Problemas](#8-solución-de-problemas)
-
----
-
-## 1. AUDITORÍA DE RIESGOS Y MITIGACIONES
-
-### RF-01 · Saturación Inalámbrica (50 usuarios · Banda 2.4GHz)
-
-| Aspecto | Problema | Mitigación implementada |
-|---------|----------|------------------------|
-| **Cola fotográfica** | 50 timers simultáneos dispararían en el mismo ms | `PhotoQueue` con jitter aleatorio ±1s sobre base de 9s → distribución uniforme en ventana de 2s |
-| **Payload WebSocket** | Frames de cámara sin comprimir colapsan el canal | JPEG calidad 0.4 → ~8-12KB/foto · Resolución 160×120px |
-| **Buffer Socket.io** | Mensajes grandes bloquean el hilo de red | `maxHttpBufferSize: 100KB` · Compresión HTTP (`gzip`) activa |
-| **Protocolo** | HTTP polling más costoso que WebSocket puro | Forzado `transports: ['websocket']` en cliente y servidor |
-
-**Cálculo de ancho de banda (peor caso):**
-- 50 alumnos × 12KB/foto ÷ 2s de ventana = ~300KB/s de subida
-- Netis WF2411: ~3Mbps efectivo 2.4GHz en entorno escolar
-- Margen disponible para heartbeats + respuestas: ~97% del canal libre ✓
+<p align="center">
+  <a href="https://github.com/ogarciabrena/vortex-server/releases/tag/v1.0.0"><strong>⬇ Descargar v1.0.0</strong></a>
+  &nbsp;·&nbsp;
+  <a href="#instalación-rápida">Instalación rápida</a>
+  &nbsp;·&nbsp;
+  <a href="#arquitectura">Arquitectura</a>
+  &nbsp;·&nbsp;
+  <a href="#solución-de-problemas">Solución de problemas</a>
+</p>
 
 ---
 
-### RF-02 · Pérdida de Suministro / Apagón del Servidor
+## ¿Qué es VORTEX?
 
-**Mecanismo State Saver transaccional:**
+VORTEX es un servidor de evaluaciones diseñado para aulas sin conexión a internet. Corre en la laptop del profesor y los alumnos acceden desde **cualquier navegador moderno** — sin instalar nada.
 
-```
-Alumno envía respuesta
-        ↓
-  socket.on('student:answer')  [RAM — <1ms]
-        ↓
-  stateSaver.saveAnswer()      [SQLite WAL síncrono — <5ms típico]
-        ↓
-  ACK confirmado               [total: <10ms]
-```
-
-- `better-sqlite3` opera en modo **síncrono** (sin callbacks/promesas) → escritura garantizada antes de enviar ACK
-- SQLite en modo **WAL** (Write-Ahead Log): las escrituras no bloquean lecturas
-- Al arrancar, `restoreActiveSessions()` reconstruye `studentState{}` desde SQLite automáticamente
-- El alumno reconecta enviando su `sessionId` guardado en `localStorage` → retoma en la pregunta exacta
-
-**Garantía de durabilidad:** Si el servidor cae entre la escritura SQLite y el ACK al cliente (ventana <5ms), la respuesta ya está en disco. El alumno simplemente reenvía al reconectar.
+| | |
+|---|---|
+| 👨‍🏫 **Para el profesor** | Panel admin en tiempo real con foto y score de sospecha por alumno |
+| 📱 **Para el alumno** | PWA que funciona desde el celular, sin descarga de apps |
+| 🔌 **Sin internet** | Funciona en red local WiFi, incluso sin router con acceso a internet |
+| 💾 **Sin pérdidas** | Cada respuesta se guarda en SQLite antes de confirmar al cliente |
+| 📦 **Sin instalación** | Binario portátil de 30MB — copia y ejecuta desde USB |
 
 ---
 
-### RF-03 · Fallas de Instalación / Cámara no Disponible
+## Descarga rápida
 
-**Árbol de decisión Graceful Degradation:**
+| Plataforma | Archivo | Tamaño |
+|------------|---------|--------|
+| 🐧 Linux x64 | [VORTEX-linux-x64.zip](https://github.com/ogarciabrena/vortex-server/releases/latest/download/VORTEX-linux-x64.zip) | ~33 MB |
+| 🪟 Windows x64 | [VORTEX-windows-x64.zip](https://github.com/ogarciabrena/vortex-server/releases/latest/download/VORTEX-windows-x64.zip) | ~27 MB |
 
-```
-Alumno conecta PWA
-        ↓
-navigator.mediaDevices.getUserMedia()
-        ├─ Éxito → Modo Normal (capturas periódicas)
-        └─ Error (denegado / roto / iOS restrictivo)
-               ↓
-        socket.emit('student:camera-status', { status: 'error' })
-               ↓
-        Servidor activa tokenMode=true para esa sesión
-               ↓
-        Admin recibe alerta "admin:camera-alert" con nombre del alumno
-               ↓
-        Admin genera token de 4 dígitos desde el dashboard
-               ↓
-        Dicta el token al alumno verbalmente
-               ↓
-        Alumno ingresa token → validación manual
-```
-
-- **Sin APK nativa**: la PWA se abre directamente desde el navegador del teléfono del alumno
-- **URL de acceso**: `http://192.168.1.50:3000/app` (el alumno escanea un QR proyectado en pantalla)
+> Los binarios incluyen Node.js embebido. No se requiere instalación previa.
 
 ---
 
-### RF-04 · Evasión de Seguridad (Trampas)
+## Instalación rápida
 
-**Principio fundamental:** Toda la lógica de evaluación vive en el servidor. El cliente es un terminal tonto.
-
-| Vector de trampa | Mitigación |
-|-----------------|------------|
-| Inspeccionar JSON para ver respuestas | `questions[].correct` NUNCA se envía al cliente |
-| DevTools abierto | Heurística `outerWidth - innerWidth > 160px` → heartbeat negativo |
-| `window.onblur` / cambio de pestaña | Detectado y reportado como `FOCUS_LOST` |
-| Script JS simulando foco continuo | Heartbeat cada 2s; si llega tarde (`delta > 6s`), `HEARTBEAT_LATE` |
-| Sin heartbeat (script bloqueado) | Watchdog servidor: si sin latido por >8s, `HEARTBEAT_MISSING` |
-| Menú contextual / copy | `contextmenu` deshabilitado durante el examen |
-
-**Score de Sospecha:** Acumulador entero. Umbrales visuales en el dashboard:
-- `0–1`: Normal (sin indicador)
-- `2–4`: Amber (tarjeta naranja en dashboard)
-- `5+`: Rojo parpadeante (alerta crítica al profesor)
-
----
-
-### RF-05 · Acceso Externo Seguro (Edge-to-Cloud)
-
-**Proceso de detección automática:**
-
-```
-Servidor arranca
-        ↓
-fetch('https://1.1.1.1', { timeout: 3000 })
-        ├─ Sin internet → "Modo Desconectado Estricto" · Todo local
-        └─ Con internet
-               ↓
-        Intento 1: cloudflared (si está instalado en el sistema)
-               ↓
-        Intento 2: localtunnel (vía npm, sin binario externo)
-               ↓
-        URL del túnel impresa en consola + log del servidor
-               ↓
-        URL apunta a /admin con autenticación Bearer Token
-               ↓
-        Alumnos en red local siguen usando /app directamente
-```
-
-- El túnel expone **únicamente** `/admin`, no `/app`
-- Los tokens de admin duran 24h y se generan vía `POST /admin/login`
-- Los alumnos en la LAN nunca conocen la URL del túnel
-
----
-
-## 2. REQUISITOS DEL SISTEMA
-
-### Servidor (laptop del profesor)
-| Componente | Mínimo | Recomendado |
-|-----------|--------|-------------|
-| OS | Windows 10 / Ubuntu 20.04 | Windows 11 / Ubuntu 22.04 |
-| RAM | 2GB libre | 4GB+ |
-| CPU | Dual-core 2GHz | Quad-core 2.5GHz+ |
-| Almacenamiento | 200MB libre | 1GB+ (para fotos en SQLite) |
-| Node.js | v18.x | v20.x LTS |
-| Conectividad | WiFi o Ethernet al router | Ethernet recomendado |
-
-### Clientes (alumnos)
-- **Cualquier smartphone** con navegador moderno (Chrome, Safari, Firefox, Edge)
-- **Android 8+** o **iOS 13+**
-- **Conexión al SSID del router** (sin internet necesario)
-- **Sin instalación de apps** requerida
-
----
-
-## 3. CONFIGURACIÓN DEL ROUTER NETIS WF2411
-
-> Accede al panel de administración del router desde: `http://192.168.1.1`
-> Usuario por defecto: `admin` · Contraseña: `admin`
-
-### Paso 1: Configurar SSID del Examen
-
-1. Ve a **Wireless → Basic Settings**
-2. Configura:
-   - **SSID:** `VORTEX-EXAMEN` (sin espacios, sin caracteres especiales)
-   - **Channel:** Manual → Selecciona el canal menos congestionado (usa una app como WiFi Analyzer para verificar). Canal 1, 6 u 11 son los únicos no superpuestos.
-   - **Mode:** 802.11n (para mejor rendimiento a 2.4GHz)
-   - **Channel Bandwidth:** 40MHz si tu entorno lo permite, 20MHz si hay mucha interferencia
-3. Haz clic en **Save**
-
-### Paso 2: DHCP IP Binding (Fijar IP del servidor)
-
-> **Objetivo:** Que la laptop del profesor siempre obtenga la IP `192.168.1.50`
-
-1. Obtén la dirección MAC de la laptop del profesor:
-   - **Windows:** `ipconfig /all` → busca "Dirección física" del adaptador WiFi/Ethernet
-   - **Linux:** `ip link show` → busca `link/ether`
-2. En el router: **DHCP → Address Reservation**
-3. Clic en **Add New** y configura:
-   - **MAC Address:** `XX:XX:XX:XX:XX:XX` (la MAC de la laptop)
-   - **Reserved IP:** `192.168.1.50`
-   - **Status:** Enabled
-4. Haz clic en **Save** y **Reboot** el router
-
-### Paso 3: Rango DHCP para Alumnos
-
-1. Ve a **DHCP → DHCP Settings**
-2. Configura:
-   - **Start IP:** `192.168.1.100`
-   - **End IP:** `192.168.1.199`
-   - **Lease Time:** `120` minutos (evita reasignaciones durante el examen)
-   - **Default Gateway:** `192.168.1.1`
-3. Haz clic en **Save**
-
-Esto reserva 100 IPs para alumnos (suficiente para 50 con margen).
-
-### Paso 4: Seguridad WiFi
-
-1. Ve a **Wireless → Wireless Security**
-2. Configura:
-   - **Security Type:** WPA2-PSK
-   - **Encryption:** AES
-   - **Password:** Una contraseña simple para el día del examen (ej. `examen2025`)
-3. Haz clic en **Save**
-
-> **Tip:** Proyecta el SSID y contraseña en la pantalla al inicio del examen para que todos se conecten simultáneamente.
-
-### Paso 5: Verificar Aislamiento de Clientes (Opcional pero recomendado)
-
-Si el router lo soporta (Netis WF2411 tiene opción limitada):
-1. Ve a **Advanced → AP Isolation**
-2. Activa si está disponible — evita que alumnos se comuniquen entre sí por WiFi
-
-### Paso 6: QR Code para los Alumnos
-
-Genera un QR con la URL del servidor y proyéctala:
-
-```
-http://192.168.1.50:3000/app
-```
-
-Puedes usar [qr-code-generator.com](https://www.qr-code-generator.com) para crear el QR en casa antes del examen.
-
----
-
-## 4. INSTALACIÓN Y ARRANQUE
-
-### Instalación (primera vez)
+### Opción A — Binario portátil (recomendado para producción)
 
 ```bash
-# Clonar o copiar el directorio vortex-server
-cd vortex-server
-
-# Instalar dependencias
-npm install
-
-# (Opcional) Configurar contraseña admin
-# Windows:
-set ADMIN_PASS=mi-contraseña-secreta
-# Linux/Mac:
-export ADMIN_PASS=mi-contraseña-secreta
+# Linux
+unzip VORTEX-linux-x64.zip
+chmod +x vortex-linux
+./vortex-linux
 ```
 
-### Arranque del servidor
-
-```bash
-# Modo producción
-npm start
-
-# Modo desarrollo (recarga automática)
-npm run dev
-```
-
-### Verificar que todo funciona
-
-Al arrancar verás en la consola:
-
-```
-╔══════════════════════════════════════════╗
-║   VORTEX SERVER — Puerto 3000            ║
-║   Dashboard admin: http://localhost:3000/admin ║
-║   PWA Alumno:      http://TU_IP:3000/app   ║
-╚══════════════════════════════════════════╝
-
-[DB] SQLite abierta: .../database/vortex.db
-[DB] Examen de demo insertado.
-[ExamEngine] 1 examen(s) cargado(s).
-[VORTEX] 0 sesiones restauradas desde SQLite.
-[TÚNEL] Sin internet — modo desconectado estricto activado.
-```
-
-### Acceder al Dashboard Admin
-
-1. Abre: `http://192.168.1.50:3000/admin`
-2. Ingresa la contraseña admin (por defecto: `vortex-admin-2025`)
-3. El sistema guarda el token en cookie por 24h
-
----
-
-## 5. COMPILAR EJECUTABLES PORTÁTILES (PKG)
-
-Esto genera archivos `.exe` (Windows) y binarios (Linux) que incluyen Node.js embebido. No se requiere instalar Node.js en la laptop del profesor.
-
-```bash
-# Instalar pkg globalmente
-npm install -g pkg
-
-# Compilar para Windows y Linux
-npm run build:all
-
-# Los archivos se generan en:
-# dist/vortex-windows.exe
-# dist/vortex-linux
-```
-
-### Uso desde USB (modo portátil)
-
-1. Copia `dist/vortex-windows.exe` (o `vortex-linux`) a una USB
-2. Copia también la carpeta `database/` a la USB (para persistir datos entre sesiones)
-3. En la laptop del profesor:
-   - Windows: doble clic en `vortex-windows.exe`
-   - Linux: `chmod +x vortex-linux && ./vortex-linux`
-
-> **Nota:** El ejecutable busca la carpeta `database/` en el mismo directorio donde se ejecuta.
-
----
-
-## 6. GUÍA DE USO DEL DASHBOARD ADMIN
-
-### Pantalla principal
-
-- **Topbar:** Estadísticas en tiempo real (en línea / terminados / alertas / sin cámara)
-- **Grid de alumnos:** Tarjetas ordenadas por Score de Sospecha (mayor sospecha arriba)
-  - 🟢 Verde: alumno activo sin anomalías
-  - 🟡 Naranja: 2-4 eventos de sospecha
-  - 🔴 Rojo parpadeante: 5+ eventos (requiere atención inmediata)
-  - ⬜ Gris: desconectado
-  - 📷✗: alumno en Modo Token (sin cámara)
-
-### Iniciar un examen
-
-1. Selecciona el examen en el selector del topbar
-2. Haz clic en **▶ Iniciar**
-3. Todos los alumnos en la sala de espera recibirán la primera pregunta automáticamente
-
-### Generar token para alumno sin cámara
-
-1. Identifica las tarjetas con el badge `📷✗`
-2. Haz clic en la tarjeta → aparece el modal con el token de 4 dígitos
-3. Dicta el código verbalmente al alumno
-4. El alumno lo ingresa en su pantalla → validación confirmada
-
-### Exportar resultados
-
-- Haz clic en **⬇ Exportar CSV** en el topbar
-- Se descarga un archivo `vortex-resultados-YYYY-MM-DD.csv` con:
-  - Nombre del alumno
-  - Score (%)
-  - Score de Sospecha
-  - Estado de cámara
-  - Si usó Modo Token
-
-### Tab Alertas (sidebar)
-
-Registro cronológico de todos los eventos de sospecha:
-- `FOCUS_LOST`: alumno cambió de pestaña o minimizó
-- `HEARTBEAT_LATE`: latido llegó tarde (posible script de simulación)
-- `HEARTBEAT_MISSING`: sin latido por >8s
-- `CAMERA_UNAVAILABLE`: cámara no accesible
-- `TOKEN_WRONG`: token manual incorrecto
-- `TOKEN_VALIDATED`: identidad confirmada por token
-
----
-
-## 7. ARQUITECTURA TÉCNICA
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    LAPTOP DEL PROFESOR                       │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │                   VORTEX SERVER                       │  │
-│  │                                                       │  │
-│  │  Express HTTP (:3000)                                 │  │
-│  │    ├── /app/*     → PWA del alumno (estático)         │  │
-│  │    ├── /admin/*   → Dashboard (autenticado)           │  │
-│  │    └── /admin/api → REST endpoints                    │  │
-│  │                                                       │  │
-│  │  Socket.io WS                                         │  │
-│  │    ├── Namespace students  (50 conexiones)            │  │
-│  │    └── Namespace admin     (1 conexión profesor)      │  │
-│  │                                                       │  │
-│  │  SQLite (better-sqlite3 síncrono)                     │  │
-│  │    └── database/vortex.db                             │  │
-│  │                                                       │  │
-│  │  Módulos                                              │  │
-│  │    ├── ExamEngine    (lógica de negocio)               │  │
-│  │    ├── StateSaver    (persistencia <100ms)             │  │
-│  │    ├── PhotoQueue    (cola con jitter)                 │  │
-│  │    ├── AdminAuth     (Bearer Token)                   │  │
-│  │    └── Tunnel        (Edge-to-Cloud opcional)         │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                          │                                   │
-│                    Ethernet/WiFi                             │
-└──────────────────────────│──────────────────────────────────┘
-                           │
-                   ┌───────┴───────┐
-                   │  ROUTER NETIS │
-                   │   WF2411      │
-                   │  192.168.1.1  │
-                   └───────┬───────┘
-                           │
-              ┌────────────┼────────────┐
-              │            │            │
-         📱 Alumno    📱 Alumno    📱 Alumno
-         .100          .101        ...199
-         PWA /app      PWA /app    PWA /app
-```
-
-### Flujo de datos (respuesta de alumno)
-
-```
-Alumno toca opción
-      ↓
-socket.emit('student:answer', { questionIndex: N, optionIndex: M })
-      ↓
-[SERVIDOR] valida sessionId, verifica fase 'exam'
-      ↓
-stateSaver.saveAnswer() → SQLite WAL sync (<5ms)
-      ↓
-examEngine.calculateScore() si es la última pregunta
-      ↓
-socket.emit('exam:question', { ...sin correct... })
-      ↓
-io.to('admin').emit('admin:student-update', snapshot)
-```
-
----
-
-## 8. SOLUCIÓN DE PROBLEMAS
-
-### Los alumnos no pueden conectarse al servidor
-
-```bash
-# Verificar que el servidor está corriendo
-# En Windows: buscar ventana de terminal con "VORTEX SERVER"
-
-# Verificar IP de la laptop
-ipconfig           # Windows
-ip addr show       # Linux
-
-# La laptop debe tener IP 192.168.1.50 (configurada por DHCP Binding)
-# Si no, asignarla manualmente:
-# Panel de control → Red → IPv4 → Manual: 192.168.1.50 / 255.255.255.0 / GW: 192.168.1.1
-```
-
-### El firewall de Windows bloquea el servidor
-
-```
-Panel de control → Firewall de Windows Defender
-→ Permitir una aplicación a través del firewall
-→ Agregar: Node.js (o el .exe compilado)
-→ Marcar tanto Privada como Pública
-```
-
-O desde PowerShell (admin):
 ```powershell
+# Windows — doble clic en vortex-windows.exe
+# O desde PowerShell:
+.\vortex-windows.exe
+```
+
+La carpeta `database/` se crea automáticamente al lado del ejecutable.
+
+### Opción B — Desde el código fuente
+
+```bash
+git clone https://github.com/ogarciabrena/vortex-server
+cd vortex-server
+npm install
+npm start
+```
+
+### Acceder al sistema
+
+| URL | Descripción |
+|-----|-------------|
+| `http://localhost:3000/admin` | Panel de administrador |
+| `http://TU_IP:3000/app` | Portal del alumno (desde cualquier dispositivo en la red) |
+
+**Contraseña por defecto:** `vortex-admin-2025`
+
+> Cámbiala desde el panel admin → icono 🔑 en el topbar. Se persiste en la base de datos.
+
+---
+
+## Funcionalidades
+
+### Panel de administrador
+
+- **Grid reactivo** de hasta 50 alumnos con actualización en tiempo real
+- **Foto de verificación** por alumno (captura periódica desde la cámara del celular)
+- **Score de sospecha** visual: verde → naranja → 🔴 rojo parpadeante
+- **Importar padrón** vía CSV (`nombre,matricula`)
+- **Importar banco de preguntas** vía CSV (`examen_titulo,pregunta,opcion_a–d,correcta`)
+- **Exportar resultados** a CSV con score, sospecha y estado de cámara
+- **Modo Token** para alumnos sin cámara: genera código de 4 dígitos para validación manual
+
+### Portal del alumno
+
+- PWA instalable (funciona offline una vez cargada)
+- Login por matrícula — validado contra padrón importado
+- Verificación por cámara con degradación automática a Modo Token
+- Anti-trampa: detecta cambio de pestaña, pérdida de foco, DevTools abierto, heartbeat tardío
+- Reconexión automática con restauración de sesión exacta
+
+### Motor de examen
+
+- Las respuestas correctas **nunca** salen del servidor
+- Escritura síncrona en SQLite antes de confirmar al cliente (<10ms)
+- Restauración automática de sesiones activas tras reinicio del servidor
+- Cola fotográfica con jitter (±1s) para evitar saturación del canal WiFi
+
+---
+
+## Formato CSV
+
+### Padrón de alumnos
+
+```csv
+nombre,matricula
+Juan García,A001
+María López,A002
+Carlos Pérez,A003
+```
+
+### Banco de preguntas
+
+```csv
+examen_titulo,pregunta,opcion_a,opcion_b,opcion_c,opcion_d,correcta
+Matemáticas,¿Cuánto es 2+2?,1,3,4,5,C
+Matemáticas,¿Cuánto es 5x5?,20,25,30,35,B
+Física,Unidad de fuerza,Julio,Newton,Pascal,Watt,B
+```
+
+> `correcta` acepta letras (A/B/C/D) o números (0/1/2/3).  
+> Múltiples exámenes en el mismo archivo — se agrupan por `examen_titulo`.
+
+---
+
+## Arquitectura
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  LAPTOP DEL PROFESOR                     │
+│                                                         │
+│   Express (:3000)          Socket.io                    │
+│   ├── /app/*  → PWA        ├── students (50 conex.)     │
+│   ├── /admin/ → Dashboard  └── admin   (1 conex.)       │
+│   └── /admin/api → REST                                 │
+│                                                         │
+│   SQLite WAL  ←→  ExamEngine  StateSaver  PhotoQueue    │
+│   database/vortex.db                                    │
+└───────────────────────────┬─────────────────────────────┘
+                            │ WiFi / Ethernet
+                     ┌──────┴──────┐
+                     │   ROUTER    │
+                     └──────┬──────┘
+              ┌─────────────┼─────────────┐
+           📱 Alumno    📱 Alumno    📱 Alumno
+           PWA /app     PWA /app    PWA /app
+```
+
+### Stack
+
+| Capa | Tecnología |
+|------|-----------|
+| Servidor HTTP | Express 4 + Helmet + Compression |
+| Tiempo real | Socket.io 4 (WebSocket puro) |
+| Base de datos | better-sqlite3 12 en modo WAL síncrono |
+| Autenticación | Bearer Token en memoria (24h TTL) + cookie |
+| Frontend admin | Vanilla JS + CSS custom (sin frameworks) |
+| Frontend alumno | PWA — Vanilla JS + Service Worker |
+| Binario portátil | @yao-pkg/pkg (node22-linux-x64 / node22-win-x64) |
+
+---
+
+## Compilar desde el código fuente
+
+```bash
+# Linux
+npm run build:linux
+# → dist/vortex-linux + dist/better_sqlite3.node
+
+# Windows (cross-compile desde Linux)
+npm run build:win
+# → dist/vortex-windows.exe
+# Requiere better_sqlite3.node compilado en Windows (ver nota abajo)
+
+# Ambos
+npm run build:all
+```
+
+> **Nota Windows:** El `better_sqlite3.node` incluido en el zip fue compilado para Windows x64.  
+> Si compilas el `.exe` en Linux, descarga el prebuilt oficial:  
+> `better-sqlite3-v12.x.x-node-v127-win32-x64.tar.gz` desde [releases de better-sqlite3](https://github.com/WiseLibs/better-sqlite3/releases).
+
+---
+
+## Variables de entorno
+
+| Variable | Valor por defecto | Descripción |
+|----------|-------------------|-------------|
+| `PORT` | `3000` | Puerto del servidor |
+| `ADMIN_PASS` | `vortex-admin-2025` | Contraseña inicial (sobreescrita por la DB tras primer cambio) |
+
+---
+
+## Solución de problemas
+
+<details>
+<summary><strong>Los alumnos no pueden conectarse</strong></summary>
+
+```bash
+# Verificar IP de la laptop
+ip addr show      # Linux
+ipconfig          # Windows
+
+# Asegurarse de que el alumno usa http:// (no https://)
+# URL correcta: http://192.168.1.50:3000/app
+```
+</details>
+
+<details>
+<summary><strong>Firewall de Windows bloquea el servidor</strong></summary>
+
+```powershell
+# Ejecutar como administrador
 New-NetFirewallRule -DisplayName "VORTEX" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow
 ```
+</details>
 
-### Los alumnos no cargan la PWA (página en blanco)
+<details>
+<summary><strong>La cámara no funciona en iOS / Safari</strong></summary>
 
-1. Verifica que el URL es correcto: `http://192.168.1.50:3000/app` (no HTTPS)
-2. Algunos navegadores de Android bloquean el primer acceso — intenta con Chrome
-3. Si usas iOS/Safari: Settings → Safari → Advanced → desactiva "Prevent Cross-Site Tracking" temporalmente
+iOS requiere HTTPS para acceder a la cámara en red local. VORTEX activa automáticamente el **Modo Token** en este caso — el profesor dicta un código de 4 dígitos para validar la identidad del alumno.
+</details>
 
-### La cámara no funciona en iOS
+<details>
+<summary><strong>El servidor no arranca: falta better_sqlite3.node</strong></summary>
 
-iOS Safari requiere HTTPS para acceder a la cámara excepto en `localhost`. Para uso en red local sin HTTPS, la degradación a Modo Token se activa automáticamente. Es el comportamiento esperado del sistema.
+```
+[PKG] FATAL: Falta better_sqlite3.node en: /ruta/al/ejecutable
+```
 
-**Solución alternativa (avanzada):** Configurar un certificado SSL auto-firmado y servir por HTTPS. Documentado en solicitud separada.
+El archivo `better_sqlite3.node` debe estar en la **misma carpeta** que el ejecutable. Descomprime el zip completo — no muevas solo el binario.
+</details>
 
-### El servidor no restaura sesiones al reiniciar
+<details>
+<summary><strong>Las sesiones no se restauran tras reiniciar</strong></summary>
 
-Verifica que el archivo `database/vortex.db` no fue movido o borrado. Si el ejecutable está en USB, asegúrate de que la carpeta `database/` esté en el mismo directorio que el ejecutable.
-
-### El túnel externo no funciona
-
-El sistema entra en modo desconectado automáticamente — no es un error. Solo el acceso externo del consultor no está disponible. El examen funciona normalmente en la red local.
-
----
-
-## VARIABLES DE ENTORNO
-
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `PORT` | `3000` | Puerto del servidor HTTP |
-| `ADMIN_PASS` | `vortex-admin-2025` | Contraseña del panel admin |
+La carpeta `database/` debe estar en el mismo directorio que el ejecutable. Si cambiaste de ubicación, copia también la carpeta `database/` junto al binario.
+</details>
 
 ---
 
-## LICENCIA
+## Licencia
 
-VORTEX es un sistema propietario desarrollado para uso interno. Todos los derechos reservados.
+VORTEX es un sistema propietario desarrollado para uso educativo.  
+© 2025 — Todos los derechos reservados.
