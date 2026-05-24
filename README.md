@@ -37,6 +37,25 @@
 
 ---
 
+## Capturas
+
+<p align="center">
+  <img src="docs/screenshots/login.png" width="480" alt="Pantalla de login"/>
+  <br/><em>Login del panel de administración</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/admin.png" width="800" alt="Panel de administrador"/>
+  <br/><em>Panel admin — monitoreo en tiempo real de hasta 50 alumnos</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/student.png" width="300" alt="Portal del alumno"/>
+  <br/><em>Portal del alumno — vista móvil (PWA)</em>
+</p>
+
+---
+
 ## ¿Qué es VORTEX?
 
 VORTEX es un servidor de evaluaciones diseñado para aulas sin conexión a internet. Corre en la laptop del profesor y los alumnos acceden desde **cualquier navegador moderno** — sin instalar nada.
